@@ -42,7 +42,9 @@ public class ServerThread implements Runnable{
 			*/
 			
 			try{
-                                                                                    
+                
+				this.input = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
+				this.output = new PrintWriter(this.socket.getOutputStream(), true);
                                                                   
 				if (this.id == -1) {
 					output.println(String.format(
@@ -59,10 +61,7 @@ public class ServerThread implements Runnable{
 				there's no use keeping this thread, so undo what the
 				server did when it decided to run it
 				*/
-				                                         
-                              
-                                    
-                                             
+			                             
 				return;
 			}
 
@@ -112,12 +111,17 @@ public class ServerThread implements Runnable{
 				*/
 				
 				if (this.id == -1 && !this.registered){
-                                       
-                            
-                                              
-                                  
-                                              
-                                           
+					
+					this.board.registration.acquire();
+					
+					this.board.threadInfoProtector.acquire();
+					this.board.installPlayer(this.id);
+					this.board.threadInfoProtector.release();
+					
+					this.registered = true;
+
+					this.board.moderatorEnabler.release();
+                        
 					continue;
 				}
 
@@ -141,45 +145,53 @@ public class ServerThread implements Runnable{
 
 				String cmd = "";
 				try {
-
+					
+					cmd = this.input.readLine();
+				
 				} 
 				catch (IOException i) {
 					//set flags
-                 
-                        
- 					
+                    quit = true;
+					client_quit = true;
+
 					// elease everything socket related
-                   
-                    
+                    this.input.close();
+					this.output.close();
+                    this.socket.close();
+
                     
 				}
 
 				if (cmd == null){
 					// rage quit (this would happen if buffer is closed due to SIGINT (Ctrl+C) from Client), set flags
-					            
+					quit = true;
+					client_quit = true;            
                         
-
 					// release everything socket related
-					              
-                    
-                    
+					this.input.close();
+					this.output.close();
+                    this.socket.close();
+
+
 				}
 
 				else if (cmd.equals("Q")) {
 					// client wants to disconnect, set flags
-					            
+					quit = true;
+					client_quit = true;            
                         
-
 					// release everything socket related
-					              
-                    
-                    
+					this.input.close();
+					this.output.close();
+                    this.socket.close();
+
+					
 				}
 
 				else{
 					try{
 						//interpret input as the integer target
-
+						target = Integer.parseInt(cmd);
 					}
 					catch(Exception e){
 						//set target that does nothing for a mispressed key
@@ -207,24 +219,39 @@ public class ServerThread implements Runnable{
 
 				Note that installation of a Fugitive sets embryo to false
 				*/
+
+				this.board.reentry.acquire();
+
 				if (!this.registered){
 					                                  
-                            
-                                              
-                                                
-                                      
-                  
-                          
-                                               
                     
-                     
-                     
-      
-          
-                                   
-                                               
+					
+                    if (this.board.dead){
+
+						quit = true;
+						client_quit=true;
+
+						this.input.close();
+						this.output.close();
+                    	this.socket.close();
+
+					}
+
+					else{
+
+						this.board.registration.acquire();
+
+						this.board.threadInfoProtector.acquire();
+						this.board.installPlayer(this.id);
+						this.board.threadInfoProtector.release();
+
+						this.registered = true;
+						
+					}
       
 				}
+
+				
 
 
 				
@@ -236,26 +263,34 @@ public class ServerThread implements Runnable{
 
 				else, erase the player
 				*/
+					if (!client_quit){
 
+						if (this.id==-1){
+							this.board.threadInfoProtector.acquire();
+							this.board.moveFugitive(target);
+							this.board.threadInfoProtector.release();
+						
+						}
+
+						else{
+							
+							this.board.threadInfoProtector.acquire();
+							this.board.moveDetective(this.id, target);
+							this.board.threadInfoProtector.release();
+						
+						}
+
+					}
                       
                                               
-                           
-                                      
-      
+                    else{
+						
+						this.board.threadInfoProtector.acquire();
+						this.board.erasePlayer(this.id);
+						this.board.threadInfoProtector.release();
 
-          
-                                                
-      
+					}
 
-                                              
-     
-
-         
-                                              
-                                     
-                                              
-     
- 			
 				/*
 
 				_______________________________________________________________________________________
@@ -270,13 +305,18 @@ public class ServerThread implements Runnable{
 				release permits for them all.
 				*/
                                         
-                       
-                                                       
-                                                            
-     
-                                        
-                                  
+                this.board.countProtector.acquire();       
+                this.board.count++ ;                                       
+                this.board.countProtector.release();
+				
+				if(this.board.count == this.board.playingThreads){
 
+					this.board.barrier1.release(this.board.playingThreads);
+
+				}
+
+				this.board.barrier1.acquire();
+    
 				/*
 				________________________________________________________________________________________
 
@@ -292,33 +332,51 @@ public class ServerThread implements Runnable{
 				if (!client_quit){
 					String feedback;
 					                                         
-                        
-                                           
-      
-          
-                                                   
-      
-                                              
+                    if (this.id==-1){
+						this.board.threadInfoProtector.acquire();
 
+						feedback = this.board.showFugitive();
+
+						this.board.threadInfoProtector.release();
+						
+					}    
+                                           
+					else{
+						this.board.threadInfoProtector.acquire();
+
+						feedback = this.board.showDetective(this.id);
+
+						this.board.threadInfoProtector.release();
+					}
+          
 					//pass this to the client via the socket output
 					try{
+
+						output.println(feedback);
 
 					}
 					//in case of IO Exception, off with the thread
 					catch(Exception i){
 						//set flags 
-						                          
+						quit = true;
+						quit_while_reading = true; 
+						
                   
 						// If you are a Fugitive you can't edit the board, but you can set dead to true
 						if(this.id == -1){
-							                                         
-                              
-                                                
+							
+							this.board.threadInfoProtector.acquire();
+  
+							this.board.dead = true;
+
+							this.board.threadInfoProtector.release();
 						}
 
 						// release everything socket related
 						              
-                     
+						input.close();
+						output.close();
+						socket.close();
                      
 					}
 
@@ -326,24 +384,24 @@ public class ServerThread implements Runnable{
 					
 					//parse this feedback to find if game is on
 					String indicator;
-
-
+					indicator = feedback.split("; ")[2];
 
 					if (!indicator.equals("Play")){
 						//Proceed simillarly to IOException
 						                          
-                  
+						quit = true;
+						quit_while_reading = true;
 
-                        
-                                                
-                              
-                                                
+						this.board.threadInfoProtector.acquire();
+						this.board.dead = true;
+						this.board.threadInfoProtector.release();
+                                              
+                        input.close();
+
+                        output.close();                        
        
-
-                                          
-                    
-                     
-                     
+						socket.close();
+                                           
 					}
 				}
 
@@ -359,11 +417,18 @@ public class ServerThread implements Runnable{
 				*/
 
 				          
-                                              
-                                
-                              
-                                              
-     
+                 if (quit){
+
+					this.board.threadInfoProtector.acquire();
+
+					this.board.totalThreads--;
+
+					this.board.quitThreads++;
+
+					this.board.threadInfoProtector.release();
+
+				 }                             
+                        
 
 				/*
 				__________________________________________________________________________________
@@ -379,11 +444,19 @@ public class ServerThread implements Runnable{
 				*/
 				
 
+				 this.board.countProtector.acquire();
 
+				 this.board.count--;
 
+				 this.board.countProtector.release();
 
+				 if (this.board.count==0){
 
+					this.board.barrier2.release(this.board.playingThreads);
 
+				 }
+
+				 this.board.barrier2.acquire();
 
 
 				/*
@@ -399,16 +472,23 @@ public class ServerThread implements Runnable{
 				*/
 				
 				
+				if (quit_while_reading) {
 
+					this.board.threadInfoProtector.acquire();
+					this.board.erasePlayer(this.id);
+					this.board.threadInfoProtector.release();
 
+				}
 
+				if (this.board.count==0){
 
+					this.board.moderatorEnabler.release();
+					
+				}
 
-
-
-
-
-
+				if(quit){
+					break;
+				}
 
     
 			}

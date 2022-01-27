@@ -72,21 +72,26 @@ public class ScotlandYard implements Runnable{
 				
 
 				Socket socket = null;
-				boolean fugitiveIn;
+				boolean fugitiveIn = false;
 				
 				/*
 				listen for a client to play fugitive, and spawn the moderator.
 				
 				here, it is actually ok to edit this.board.dead, because the game hasn't begun
 				*/
-				
 				do{
-			                    
-          
+			        try{
+						socket = this.server.accept();
+					}
+
+					catch (SocketTimeoutException t){
+
+						continue;
+					}
                                     
-       
+					fugitiveIn = true;
                                        
-                         
+                    this.board.dead = false;     
                
       
 				} while (!fugitiveIn);
@@ -95,30 +100,50 @@ public class ScotlandYard implements Runnable{
 
 				// Spawn a thread to run the Fugitive
                                              
-                                 
+                ServerThread fug = new ServerThread(this.board, -1, socket, this.port, this.gamenumber);                 
                             
-                                                                                                  
+                this.threadPool.execute(fug);  
+				
+				this.board.threadInfoProtector.acquire();
+				this.board.totalThreads++;
+				//this.board.playingThreads++;
+				this.board.threadInfoProtector.release();
                                              
-
 				// Spawn the moderator
-                                                  
                 
+				Thread mod = new Thread(new Moderator(this.board));
+
+				mod.start();
+				
 				while (true){
+					
 					/*
 					listen on the server, accept connections
 					if there is a timeout, check that the game is still going on, and then listen again!
 					*/
 
+					Socket socketfug = null;
+
 					try {
 
+						socketfug = this.server.accept();
+
 					} 
+
 					catch (SocketTimeoutException t){
-                                               
-                            
-                                                
-             
-       
-                                               
+                        
+						this.board.threadInfoProtector.acquire();
+
+                        if (this.board.dead){
+
+							this.board.threadInfoProtector.release();
+
+							break;
+
+						}   
+
+						this.board.threadInfoProtector.release();
+
 						continue;
 					}
 					
@@ -133,22 +158,37 @@ public class ScotlandYard implements Runnable{
 					don't forget to release lock when done!
 					*/
 					                                         
-                          
+                    this.board.threadInfoProtector.acquire();      
                      
-                                               
-            
-      
-                                                 
-                          
-                     
-                                               
-               
-      
-     
-                                                                                                          
-                                  
+                    int x = this.board.getAvailableID();
+					
+					if(this.board.dead){
 
-                                              
+						this.board.threadInfoProtector.release();
+
+						socketfug.close();
+
+						break;
+
+					}
+					
+				
+					else if(x==-1){
+
+						this.board.threadInfoProtector.release();
+
+						continue;
+					}                             
+                          
+                     
+                    ServerThread th = new ServerThread(this.board, x, socketfug, this.port, this.gamenumber);                           
+               
+					this.threadPool.execute(th);
+     
+                    this.board.totalThreads++;
+					//this.board.playingThreads++;                                                                                      
+					
+					this.board.threadInfoProtector.release();
 
 				}
 
@@ -158,7 +198,9 @@ public class ScotlandYard implements Runnable{
 				kill threadPool (Careless Whispers BGM stops)
 				*/
 			            
-                        
+                mod.join();
+				this.server.close();     
+				this.threadPool.shutdown();   
                                
     
 				System.out.println(String.format("Game %d:%d Over", this.port, this.gamenumber));
